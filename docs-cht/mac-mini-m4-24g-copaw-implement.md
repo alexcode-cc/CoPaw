@@ -803,30 +803,143 @@ copaw cron create \
 
 > **24GB 獨有優勢**：16GB 版建議使用雲端 Embedding API，但 24GB 可以運行本地 Embedding 模型，實現完全離線的長期記憶功能。
 
+### 什麼是 Embedding？為什麼需要它？
+
+Embedding 是將文字轉換為向量（一串數字）的技術，讓 CoPaw 能夠：
+- **語意搜尋**：Agent 可以搜尋過去對話中語意相關的內容（而非僅關鍵字匹配）
+- **長期記憶**：將重要資訊索引化，跨會話保留記憶
+- **日記功能**：每日自動將對話摘要寫入 `memory/YYYY-MM-DD.md`，並建立向量索引
+
+沒有 Embedding，CoPaw 仍可運作，但不具備長期記憶與語意搜尋能力。
+
 ### 方案 1：Ollama 本地 Embedding（推薦）
 
-```bash
-# 下載 Embedding 模型
-ollama pull nomic-embed-text
+完全離線、免費、隱私最高的方案。
 
-# 驗證模型已載入
-ollama list
+#### 步驟 1：確認 Ollama 已安裝並運行
+
+```bash
+# 確認 Ollama 服務正在運行
+brew services list | grep ollama
+
+# 如果未運行，啟動它
+brew services start ollama
+
+# 驗證服務正常
+curl http://localhost:11434/api/tags
 ```
 
-設定 CoPaw 使用本地 Embedding：
+#### 步驟 2：下載 Embedding 模型
 
 ```bash
+# 推薦：nomic-embed-text（768 維，~0.3GB，效能良好）
+ollama pull nomic-embed-text
+```
+
+若需要更高品質的 Embedding：
+
+```bash
+# 進階：mxbai-embed-large（1024 維，~0.7GB，品質更好）
+ollama pull mxbai-embed-large
+```
+
+確認模型已下載：
+
+```bash
+ollama list | grep embed
+# 應看到 nomic-embed-text 或 mxbai-embed-large
+```
+
+#### 步驟 3：驗證 Embedding API 可用
+
+Ollama 提供 OpenAI 相容的 Embedding API，先手動測試確認：
+
+```bash
+curl http://localhost:11434/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nomic-embed-text",
+    "input": "測試文字"
+  }'
+# 應回傳包含 "embedding" 陣列的 JSON
+```
+
+#### 步驟 4：設定 CoPaw 使用本地 Embedding
+
+```bash
+# 設定 Embedding API 連線（指向本地 Ollama）
 copaw env set EMBEDDING_BASE_URL "http://localhost:11434/v1"
 copaw env set EMBEDDING_API_KEY "ollama"
 copaw env set EMBEDDING_MODEL_NAME "nomic-embed-text"
 copaw env set EMBEDDING_DIMENSIONS "768"
+
+# 啟用記憶管理器
 copaw env set ENABLE_MEMORY_MANAGER "true"
+
+# 設定向量儲存後端（macOS 使用 chroma）
 copaw env set MEMORY_STORE_BACKEND "chroma"
 ```
 
+> **如果使用 mxbai-embed-large**，將 `EMBEDDING_MODEL_NAME` 改為 `mxbai-embed-large`，`EMBEDDING_DIMENSIONS` 改為 `1024`。
+
+#### 步驟 5：重啟 CoPaw 使設定生效
+
+```bash
+# 如果 CoPaw 正在運行，需要重啟
+# 先停止
+pkill -f "copaw app" 2>/dev/null
+
+# 重新啟動
+copaw app
+```
+
+#### 步驟 6：驗證長期記憶功能
+
+啟動 CoPaw 後，在 Web Console（`http://127.0.0.1:8088`）或 Discord 中測試：
+
+```
+你：請記住我最喜歡的程式語言是 Python
+Agent：好的，我會記住你最喜歡 Python。
+
+（等待幾秒鐘讓記憶索引完成）
+
+你：你還記得我喜歡什麼程式語言嗎？
+Agent：（使用 memory_search 工具搜尋）你之前提到最喜歡的程式語言是 Python。
+```
+
+如果 Agent 能正確回憶，表示 Embedding 和長期記憶已正常運作。
+
+#### 步驟 7：了解記憶儲存結構
+
+啟用後，CoPaw 會自動管理以下檔案：
+
+```
+~/.copaw/
+├── MEMORY.md              # 用戶可手動編輯的重要長期資訊
+├── memory/
+│   ├── 2026-03-01.md      # 每日自動日記（由 Agent 寫入）
+│   ├── 2026-03-02.md
+│   └── 2026-03-03.md
+```
+
+- **MEMORY.md**：你可以手動寫入重要資訊（如偏好、專案筆記），Agent 會自動索引
+- **memory/YYYY-MM-DD.md**：Agent 每天自動寫入的對話摘要與重要事項
+- 所有檔案都會被 Embedding 模型向量化，供 `memory_search` 工具搜尋
+
 ### 方案 2：DashScope 雲端 Embedding
 
-如果不想用本地資源：
+如果不想用本地資源，或需要更高品質的 Embedding（1024 維度）。
+
+#### 步驟 1：取得 DashScope API Key
+
+1. 前往 [阿里雲 DashScope](https://dashscope.console.aliyun.com/)
+2. 註冊/登入帳號
+3. 進入 **API Key 管理** 頁面
+4. 點擊 **建立 API Key**，複製產生的 Key（格式：`sk-...`）
+
+> DashScope 提供免費額度，日常使用通常足夠。
+
+#### 步驟 2：設定 CoPaw
 
 ```bash
 copaw env set EMBEDDING_API_KEY "sk-你的DashScope-Key"
@@ -835,16 +948,47 @@ copaw env set EMBEDDING_DIMENSIONS "1024"
 copaw env set ENABLE_MEMORY_MANAGER "true"
 ```
 
-### 本地 vs 雲端 Embedding 對比
+> **注意**：使用 DashScope 時不需要設定 `EMBEDDING_BASE_URL`，CoPaw 會使用預設的 DashScope 端點。
 
-| 指標 | 本地（nomic-embed-text） | 雲端（DashScope） |
-|------|------------------------|-------------------|
-| 費用 | 免費 | 有免費額度，超過付費 |
-| 記憶體 | ~300MB | 0 |
-| 隱私 | 完全離線 | 資料上傳到雲端 |
-| 速度 | 較快（本地） | 取決於網路 |
-| 品質 | 良好（768 維） | 更好（1024 維） |
-| 離線可用 | ✅ | ❌ |
+#### 步驟 3：重啟並驗證
+
+```bash
+pkill -f "copaw app" 2>/dev/null
+copaw app
+```
+
+在 Console 中測試記憶功能（同方案 1 步驟 6）。
+
+### Embedding 模型選擇比較
+
+| 模型 | 維度 | 記憶體 | 費用 | 品質 | 隱私 | 離線 |
+|------|------|--------|------|------|------|------|
+| `nomic-embed-text`（本地） | 768 | ~0.3 GB | 免費 | ★★★★☆ | 完全離線 | ✅ |
+| `mxbai-embed-large`（本地） | 1024 | ~0.7 GB | 免費 | ★★★★★ | 完全離線 | ✅ |
+| `all-minilm`（本地） | 384 | ~0.1 GB | 免費 | ★★★☆☆ | 完全離線 | ✅ |
+| `text-embedding-v4`（DashScope） | 1024 | 0 | 有免費額度 | ★★★★★ | 雲端 | ❌ |
+
+### 常見問題
+
+**Q: 啟用 Embedding 後 CoPaw 啟動變慢？**
+
+首次啟動時，CoPaw 需要為已有的 MEMORY.md 和 memory/ 目錄下的檔案建立向量索引，這可能需要 10-30 秒。後續啟動會使用快取，速度正常。
+
+**Q: 如何清除記憶重新開始？**
+
+```bash
+# 清除向量索引（保留原始 markdown 檔案）
+rm -rf ~/.copaw/memory_index/
+
+# 或同時清除日記
+rm -rf ~/.copaw/memory/
+
+# 重啟 CoPaw 會重新建立索引
+```
+
+**Q: Embedding 模型會與 LLM 搶記憶體嗎？**
+
+`nomic-embed-text` 僅佔 ~300MB，與 14B LLM（~8.5GB）共存完全沒問題。24GB 機器可同時常駐 LLM + Embedding（設定 `OLLAMA_MAX_LOADED_MODELS=2`）。
 
 ---
 
@@ -1068,18 +1212,114 @@ copaw models add-model ollama-remote -m "qwen3:32b" -n "Qwen3 32B"
 
 ### 步驟 5：提供遠端 Embedding 服務
 
-若已下載 `nomic-embed-text`，16GB 客戶端可直接使用本機的 Embedding：
+> 除了提供 LLM 推理，24GB 機器還可以同時提供 Embedding 服務，讓 16GB 客戶端擁有長期記憶功能，完全不佔用客戶端記憶體。
+
+#### 5.1 在 24GB 伺服器上設定 Embedding（本機操作）
 
 ```bash
-# 確認 Embedding 模型已下載
-ollama list | grep nomic-embed-text
+# ── 步驟 a：下載 Embedding 模型 ──
+ollama pull nomic-embed-text
 
-# 16GB 客戶端設定（在 16GB 機器上執行）
+# 確認已下載
+ollama list | grep nomic-embed-text
+# 應看到 nomic-embed-text
+
+# ── 步驟 b：驗證 Embedding API 可用 ──
+curl http://localhost:11434/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nomic-embed-text",
+    "input": "測試文字"
+  }'
+# 應回傳包含 "embedding" 陣列的 JSON
+
+# ── 步驟 c：確認遠端可存取 ──
+# 前提：已完成步驟 1（OLLAMA_HOST=0.0.0.0:11434）
+# 從遠端機器測試：
+# curl http://192.168.1.100:11434/v1/embeddings \
+#   -H "Content-Type: application/json" \
+#   -d '{"model":"nomic-embed-text","input":"test"}'
+```
+
+#### 5.2 確認 Ollama 可同時載入 LLM + Embedding
+
+Embedding 模型很小（~300MB），可以與 14B LLM 同時常駐：
+
+```bash
+# 確認 MAX_LOADED_MODELS >= 2（已在步驟 1 的 LaunchAgent 中設定）
+# 這樣 Ollama 可同時保持 qwen3:14b + nomic-embed-text 在記憶體中
+
+# 驗證當前載入的模型
+curl -s http://localhost:11434/api/ps | python3 -m json.tool
+```
+
+記憶體分配參考：
+
+```
+24GB 總記憶體
+├── macOS 系統          ~3.5 GB
+├── Qwen3 14B           ~8.5 GB（主力 LLM）
+├── nomic-embed-text    ~0.3 GB（Embedding）
+├── CoPaw 服務          ~0.5 GB（如果本機也跑 CoPaw）
+└── 剩餘                ~11.2 GB（充裕）
+```
+
+#### 5.3 在 16GB 客戶端設定遠端 Embedding（在 16GB 機器上操作）
+
+```bash
+# ── 步驟 a：設定 Embedding API 指向 24GB 伺服器 ──
 copaw env set EMBEDDING_BASE_URL "http://192.168.1.100:11434/v1"
 copaw env set EMBEDDING_API_KEY "ollama"
 copaw env set EMBEDDING_MODEL_NAME "nomic-embed-text"
 copaw env set EMBEDDING_DIMENSIONS "768"
+
+# ── 步驟 b：啟用記憶管理器 ──
 copaw env set ENABLE_MEMORY_MANAGER "true"
+
+# ── 步驟 c：重啟 CoPaw 使設定生效 ──
+pkill -f "copaw app" 2>/dev/null
+copaw app
+```
+
+> **注意**：將 `192.168.1.100` 替換為你的 24GB 機器實際 IP。
+
+#### 5.4 驗證遠端 Embedding 正常運作
+
+在 16GB 機器的 CoPaw Console（`http://127.0.0.1:8088`）中測試：
+
+```
+你：請記住我的專案叫做 CoPaw
+Agent：好的，我會記住。
+
+（稍等幾秒）
+
+你：我的專案叫什麼名字？
+Agent：（使用 memory_search）你的專案叫做 CoPaw。
+```
+
+如果 Agent 能正確回憶，表示遠端 Embedding 已正常運作。
+
+#### 5.5 故障排除
+
+如果遠端 Embedding 無法使用：
+
+```bash
+# 1. 在 16GB 機器上測試連線
+curl http://192.168.1.100:11434/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model":"nomic-embed-text","input":"test"}'
+
+# 2. 如果連線失敗，確認：
+#    - 24GB 機器 Ollama 是否運行
+#    - OLLAMA_HOST 是否為 0.0.0.0:11434
+#    - 防火牆是否放行 11434 埠
+#    - IP 地址是否正確
+
+# 3. 如果連線成功但 CoPaw 記憶不工作，確認：
+#    - ENABLE_MEMORY_MANAGER 是否為 "true"
+#    - CoPaw 是否已重啟
+#    - 查看 CoPaw 日誌中是否有 embedding 相關錯誤
+tail -50 ~/copaw.log | grep -i embed
 ```
 
 ### 網路與安全考量
