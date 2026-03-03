@@ -80,5 +80,5 @@ logs/
 .claude
 openspec
 /AGENTS.md
-CLAUDE.md
+#CLAUDE.md
 *.tmp
