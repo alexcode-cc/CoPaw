@@ -1,6 +1,6 @@
 # Mac Mini M4 CoPaw 完整實作指南
 
-> 本指南詳細說明如何在 **Mac Mini M4 (16GB)** 上從無到有部署 CoPaw，整合 Ollama 本地模型或 Claude API、Discord 機器人、Gmail 自動收發、GitHub 專案上傳與通知。
+> 本指南詳細說明如何在 **Mac Mini M4 (16GB)** 上從無到有部署 CoPaw，整合 Ollama 本地模型、**遠端 Ollama（另一台 Mac Mini M4 24GB）**、Claude API、Discord 機器人、Gmail 自動收發、GitHub 專案上傳與通知。
 
 ---
 
@@ -11,6 +11,7 @@
 - [第二部分：設定 AI 引擎](#第二部分設定-ai-引擎)
   - [方案 A：Ollama 本地模型](#方案-aollama-本地模型)
   - [方案 B：Claude API（Anthropic）](#方案-bclaude-apianthropic)
+  - [方案 C：遠端 Ollama（24GB 機器）](#方案-c遠端-ollama24gb-機器)
 - [第三部分：設定 Discord 機器人](#第三部分設定-discord-機器人)
 - [第四部分：設定 Gmail 自動收發](#第四部分設定-gmail-自動收發)
 - [第五部分：設定 GitHub 專案自動上傳](#第五部分設定-github-專案自動上傳)
@@ -26,7 +27,7 @@
 
 ### 硬體確認
 
-Mac Mini M4 16GB 適合執行 7B 至 14B 參數的本地模型。若使用 Claude API 作為主力引擎，16GB 完全足夠。
+Mac Mini M4 16GB 適合執行 7B 至 14B 參數的本地模型。若使用 Claude API 作為主力引擎，16GB 完全足夠。若另有 **Mac Mini M4 24GB**，可將 Ollama 部署於其上，本機 CoPaw 指向遠端，使用 14B ~ 32B 等更大模型（見[方案 C](#方案-c遠端-ollama24gb-機器)）。
 
 ### 安裝基礎工具
 
@@ -92,7 +93,7 @@ copaw init
 
 ## 第二部分：設定 AI 引擎
 
-CoPaw 提供兩種 AI 引擎方案，你可以擇一使用，也可以兩者並存、隨時切換。
+CoPaw 提供多種 AI 引擎方案，你可以擇一使用，也可以並存、隨時切換。若你另有 **Mac Mini M4 24GB** 作為高效能機器，可將 Ollama 部署於其上，讓 16GB 本機的 CoPaw 指向遠端，使用 14B ~ 32B 等更大模型。
 
 ### 方案 A：Ollama 本地模型
 
@@ -337,18 +338,290 @@ copaw app &
 curl -X POST http://127.0.0.1:8088/api/models/anthropic/test
 ```
 
-### 切換 AI 引擎
+---
 
-設定好兩個引擎後，可隨時透過前端或 CLI 切換：
+### 方案 C：遠端 Ollama（24GB 機器）
+
+若你擁有另一台 **Mac Mini M4 24GB**，可將 Ollama 部署於其上，讓 16GB 本機的 CoPaw 透過網路呼叫遠端模型，使用 14B ~ 32B 等更大參數的模型，而不佔用本機記憶體。
+
+#### 架構說明
+
+```
+┌─────────────────────────────────┐    網路 (LAN)    ┌─────────────────────────────────┐
+│  Mac Mini M4 16GB（本機）        │ ◄─────────────► │  Mac Mini M4 24GB（遠端）        │
+│                                 │   HTTP :11434   │                                 │
+│  • CoPaw 服務                    │                 │  • Ollama 服務                    │
+│  • Discord / Gmail / GitHub      │                 │  • Qwen3 14B / 32B 等大模型       │
+│  • 本地 Ollama（可選，7B~8B）    │                 │  • 本地 Embedding（可選）         │
+└─────────────────────────────────┘                 └─────────────────────────────────┘
+```
+
+**優勢**：16GB 本機不跑大模型，記憶體留給 CoPaw、瀏覽器與其他應用；24GB 遠端專心跑 14B ~ 32B 模型，效能與品質兼顧。
+
+---
+
+#### 遠端端（24GB 機器）設定
+
+在 **Mac Mini M4 24GB** 上完成以下設定，使其成為 Ollama 伺服器。
+
+##### 步驟 C1：安裝並啟動 Ollama
 
 ```bash
-# 切換到 Ollama
-copaw models set-llm
-# 選 ollama → qwen3:8b
+# 在 24GB 機器上執行
+brew install ollama
+brew services start ollama
+```
 
-# 切換到 Claude
+##### 步驟 C2：設定 Ollama 接受遠端連線
+
+Ollama 預設只監聽 `127.0.0.1`，需設定 `OLLAMA_HOST` 才能接受來自其他機器的連線。
+
+**方式一：編輯 Homebrew 的 plist（推薦）**
+
+```bash
+# 在 24GB 機器上執行
+# plist 路徑：Apple Silicon 為 /opt/homebrew/opt/ollama/，Intel 為 /usr/local/opt/ollama/
+sudo nano /opt/homebrew/opt/ollama/homebrew.mxcl.ollama.plist
+```
+
+在 `<dict>` 最外層內加入（若已有 `EnvironmentVariables`，則在該 dict 內加入 `OLLAMA_HOST`）：
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>OLLAMA_HOST</key>
+    <string>0.0.0.0:11434</string>
+</dict>
+```
+
+儲存後重啟服務：
+
+```bash
+brew services restart ollama
+```
+
+> **注意**：若使用 `brew upgrade ollama` 更新，Homebrew 的 plist 可能被覆蓋，需重新加入 `OLLAMA_HOST`。若需長期穩定，建議改用下方自訂 LaunchAgent。
+
+**方式二：自訂 LaunchAgent（更易維護）**
+
+若不想修改 Homebrew 的 plist，可建立自訂 plist：
+
+```bash
+# 停止 Homebrew 管理的 Ollama
+brew services stop ollama
+
+# 建立自訂 LaunchAgent
+cat > ~/Library/LaunchAgents/com.ollama.remote.plist << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ollama.remote</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/ollama</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/ollama.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/ollama-error.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OLLAMA_HOST</key>
+        <string>0.0.0.0:11434</string>
+        <key>OLLAMA_NUM_PARALLEL</key>
+        <string>2</string>
+        <key>OLLAMA_KEEP_ALIVE</key>
+        <string>1h</string>
+    </dict>
+</dict>
+</plist>
+PLIST
+
+launchctl load ~/Library/LaunchAgents/com.ollama.remote.plist
+```
+
+> **注意**：Intel Mac 的 ollama 路徑可能為 `/usr/local/bin/ollama`，請依實際安裝路徑調整。
+
+##### 步驟 C3：防火牆放行 11434 埠
+
+```bash
+# 在 24GB 機器上執行
+# 若使用 macOS 內建防火牆，需允許傳入連線
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /opt/homebrew/bin/ollama
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /opt/homebrew/bin/ollama
+
+# 或於「系統設定 → 網路 → 防火牆 → 選項」中，允許 ollama 接受傳入連線
+```
+
+##### 步驟 C4：下載 24GB 適用模型
+
+在 24GB 機器上執行（詳見 [24GB 實作指南](./mac-mini-m4-24g-copaw-implement.md#第三部分24gb-模型完整選擇指南)）：
+
+```bash
+# 在 24GB 機器上執行
+ollama pull qwen3:14b           # 主力對話（~8.5GB）
+ollama pull qwen2.5-coder:14b   # 程式開發（~8.5GB）
+ollama pull qwen3:32b           # 極致品質（~18GB，可選）
+ollama pull nomic-embed-text    # 本地 Embedding（可選）
+```
+
+##### 步驟 C5：取得遠端 IP 並驗證
+
+```bash
+# 在 24GB 機器上執行，取得 IP
+ifconfig | grep "inet " | grep -v 127.0.0.1
+# 例如：192.168.1.100
+
+# 在本機（16GB）上測試遠端連線
+curl http://192.168.1.100:11434/api/tags
+# 應回傳 JSON，列出遠端已下載的模型
+```
+
+---
+
+#### 本地端（16GB 機器）設定
+
+在 **Mac Mini M4 16GB**（執行 CoPaw 的機器）上完成以下設定。
+
+##### 方式一：新增「遠端 Ollama」自訂 Provider（推薦）
+
+保留本地 Ollama，同時新增遠端 Provider，可隨時切換：
+
+```bash
+# 在 16GB 機器上執行
+# 1. 新增自訂 Provider（將 192.168.1.100 替換為你的 24GB 機器 IP）
+copaw models add-provider ollama-remote \
+  -n "Ollama 遠端 (24GB)" \
+  -u "http://192.168.1.100:11434/v1" \
+  --api-key-prefix ""
+
+# 2. 新增遠端模型（需與 24GB 機器上 ollama list 的模型一致）
+copaw models add-model ollama-remote -m "qwen3:14b" -n "Qwen3 14B"
+copaw models add-model ollama-remote -m "qwen2.5-coder:14b" -n "Qwen 2.5 Coder 14B"
+copaw models add-model ollama-remote -m "qwen3:32b" -n "Qwen3 32B"
+# 依遠端實際下載的模型新增
+
+# 3. 設為目前使用的模型
 copaw models set-llm
-# 選 anthropic → claude-sonnet-4-20250514
+# 選擇 provider: ollama-remote
+# 選擇 model: qwen3:14b（或遠端有的模型）
+```
+
+**手動編輯 `~/.copaw/providers.json`**（若 CLI 不支援自訂 Provider 的 base_url，可直接編輯）：
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "base_url": "http://localhost:11434/v1",
+      "api_key": "",
+      "extra_models": []
+    }
+  },
+  "custom_providers": {
+    "ollama-remote": {
+      "id": "ollama-remote",
+      "name": "Ollama 遠端 (24GB)",
+      "default_base_url": "http://192.168.1.100:11434/v1",
+      "api_key_prefix": "",
+      "models": [
+        { "id": "qwen3:14b", "name": "Qwen3 14B" },
+        { "id": "qwen2.5-coder:14b", "name": "Qwen 2.5 Coder 14B" },
+        { "id": "qwen3:32b", "name": "Qwen3 32B" }
+      ],
+      "base_url": "http://192.168.1.100:11434/v1",
+      "api_key": "",
+      "chat_model": "OpenAIChatModel"
+    }
+  },
+  "active_llm": {
+    "provider_id": "ollama-remote",
+    "model": "qwen3:14b"
+  }
+}
+```
+
+> **重要**：`models` 陣列需與遠端實際已下載的模型一致。在 24GB 機器上執行 `ollama list` 取得模型 ID。
+
+##### 方式二：直接將內建 Ollama 指向遠端
+
+若本機不跑 Ollama，可將內建 Provider 的 `base_url` 改為遠端：
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "base_url": "http://192.168.1.100:11434/v1",
+      "api_key": "",
+      "extra_models": []
+    }
+  },
+  "active_llm": {
+    "provider_id": "ollama",
+    "model": "qwen3:14b"
+  }
+}
+```
+
+CoPaw 會自動從遠端同步模型清單。缺點是無法同時保留「本地 Ollama」與「遠端 Ollama」的切換。
+
+---
+
+#### 網路與安全考量
+
+| 情境 | 建議 |
+|------|------|
+| **同一區域網路（LAN）** | 使用區網 IP（如 `192.168.1.100`），延遲低、設定簡單 |
+| **不同網段 / VPN** | 確保 11434 埠可達，或透過 SSH 隧道（見下方） |
+| **暴露於網際網路** | ⚠ 不建議。Ollama 無內建認證，若必須暴露，請使用反向代理 + 認證（如 nginx + basic auth） |
+| **固定 IP** | 建議在路由器為 24GB 機器設定 DHCP 保留，避免 IP 變動 |
+
+**SSH 隧道（跨網段 / 安全連線）**：
+
+若 16GB 與 24GB 不在同一網段，可透過 SSH 隧道轉發：
+
+```bash
+# 在 16GB 機器上執行，建立隧道
+ssh -L 11434:localhost:11434 user@24gb-machine-ip -N &
+
+# 然後 CoPaw 的 base_url 設為 http://localhost:11434/v1
+# 流量會經由 SSH 加密轉發到遠端
+```
+
+---
+
+#### 遠端 Embedding（可選）
+
+若 24GB 機器有運行 `nomic-embed-text`，可讓 16GB 本機的 CoPaw 使用遠端 Embedding：
+
+```bash
+# 在 16GB 機器上設定環境變數
+copaw env set EMBEDDING_BASE_URL "http://192.168.1.100:11434/v1"
+copaw env set EMBEDDING_API_KEY "ollama"
+copaw env set EMBEDDING_MODEL_NAME "nomic-embed-text"
+copaw env set EMBEDDING_DIMENSIONS "768"
+copaw env set ENABLE_MEMORY_MANAGER "true"
+```
+
+---
+
+### 切換 AI 引擎
+
+設定好多個引擎後，可隨時透過前端或 CLI 切換：
+
+```bash
+copaw models set-llm
+
+# 選 ollama → qwen3:8b           # 本地 Ollama（7B~8B）
+# 選 ollama-remote → qwen3:14b   # 遠端 Ollama（14B~32B）
+# 選 anthropic → claude-sonnet-4-20250514  # Claude API
 ```
 
 ---
@@ -1038,6 +1311,29 @@ ollama pull qwen3:4b
 
 # 或使用量化更高的版本
 ollama pull qwen3:8b-q4_0
+
+# 或改用遠端 Ollama（見方案 C），讓 24GB 機器跑大模型
+```
+
+### Q: 遠端 Ollama 連線失敗
+
+**檢查清單**：
+
+1. **24GB 機器 Ollama 是否運行**：在 24GB 機器上執行 `curl http://localhost:11434/api/tags`
+2. **OLLAMA_HOST 是否已設定**：24GB 機器需設定 `OLLAMA_HOST=0.0.0.0:11434` 並重啟服務
+3. **網路連通性**：在 16GB 機器上執行 `curl http://24GB機器IP:11434/api/tags`
+4. **防火牆**：24GB 機器需放行 11434 埠
+5. **base_url 格式**：需包含 `/v1`，例如 `http://192.168.1.100:11434/v1`
+6. **IP 是否變動**：若使用 DHCP，建議在路由器設定 DHCP 保留
+
+**除錯**：
+```bash
+# 在 16GB 機器上測試
+curl -v http://192.168.1.100:11434/api/tags
+
+# 若跨網段，可先用 SSH 隧道測試
+ssh -L 11434:localhost:11434 user@24gb-ip -N &
+curl http://localhost:11434/api/tags
 ```
 
 ### Q: Discord Bot 無回應
@@ -1176,6 +1472,58 @@ copaw cron run <job_id>
   }
 }
 ```
+
+### `~/.copaw/providers.json` 完整範例（三引擎：本地 + 遠端 Ollama + Claude）
+
+適用於 16GB 本機 + 24GB 遠端 Ollama 的混合架構：
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "base_url": "http://localhost:11434/v1",
+      "api_key": "",
+      "extra_models": []
+    }
+  },
+  "custom_providers": {
+    "ollama-remote": {
+      "id": "ollama-remote",
+      "name": "Ollama 遠端 (24GB)",
+      "default_base_url": "http://192.168.1.100:11434/v1",
+      "api_key_prefix": "",
+      "models": [
+        { "id": "qwen3:14b", "name": "Qwen3 14B" },
+        { "id": "qwen2.5-coder:14b", "name": "Qwen 2.5 Coder 14B" },
+        { "id": "qwen3:32b", "name": "Qwen3 32B" }
+      ],
+      "base_url": "http://192.168.1.100:11434/v1",
+      "api_key": "",
+      "chat_model": "OpenAIChatModel"
+    },
+    "anthropic": {
+      "id": "anthropic",
+      "name": "Anthropic (Claude)",
+      "default_base_url": "https://api.anthropic.com/v1",
+      "api_key_prefix": "sk-ant-",
+      "models": [
+        { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4" },
+        { "id": "claude-opus-4-20250514", "name": "Claude Opus 4" },
+        { "id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku" }
+      ],
+      "base_url": "https://api.anthropic.com/v1",
+      "api_key": "sk-ant-你的API Key",
+      "chat_model": "OpenAIChatModel"
+    }
+  },
+  "active_llm": {
+    "provider_id": "ollama-remote",
+    "model": "qwen3:14b"
+  }
+}
+```
+
+> **注意**：將 `192.168.1.100` 替換為你的 24GB 機器實際 IP。`ollama-remote.models` 需與遠端 `ollama list` 的模型一致。
 
 ### `~/.config/himalaya/config.toml` 完整範例
 

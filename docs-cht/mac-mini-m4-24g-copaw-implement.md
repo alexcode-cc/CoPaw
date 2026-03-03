@@ -378,6 +378,17 @@ copaw models set-llm  # 選 anthropic → claude-sonnet-4-20250514
 你：接下來的任務比較複雜，請幫我切換到 Claude
 ```
 
+### 作為遠端 Ollama 伺服器（供 16GB 本機使用）
+
+若你同時擁有 **Mac Mini M4 16GB** 與 **24GB**，可將 24GB 機器設為 Ollama 伺服器，讓 16GB 本機的 CoPaw 透過網路呼叫遠端模型，使用 14B ~ 32B 等更大模型。
+
+**24GB 機器需完成**：
+1. 設定 `OLLAMA_HOST=0.0.0.0:11434` 以接受遠端連線
+2. 防火牆放行 11434 埠
+3. 下載 14B ~ 32B 模型
+
+**完整遠端與本地設定步驟**請參考 [16GB 實作指南 — 方案 C：遠端 Ollama](./mac-mini-m4-copaw-implement.md#方案-c遠端-ollama24gb-機器)。
+
 ---
 
 ## 第三部分：24GB 模型完整選擇指南
